@@ -14,7 +14,7 @@ Use clear, honest descriptions. It is fine if your system is imperfect.
 
 **What is DocuBot trying to do?**
 
-DocuBot is a documentation assistant that answers developer questions grounded in a specific set of project documents. It is designed to avoid hallucination by retrieving relevant sections before generating answers, and to refuse when the docs do not support a response.
+DocuBot is a lightweight retrieval-augmented assistant designed to answer questions about a software project's internal documentation. It reads local doc files, finds relevant sections, and generates grounded answers, refusing to speculate when the docs do not contain enough evidence.
 
 **What inputs does DocuBot take?**
 
@@ -40,10 +40,13 @@ DocuBot is a documentation assistant that answers developer questions grounded i
 
 **What tradeoffs did you make?**
 
-- Splitting on markdown headers keeps chunks semantically meaningful, but means sections with no header (e.g., a preamble paragraph) may be grouped under the document title rather than a descriptive header.
-- Term frequency rewards documents that repeat query terms, which improves ranking but can over-weight verbose sections.
-- `MIN_SCORE = 3` was tuned empirically on four test queries. A higher threshold reduces noise but risks missing relevant sections in shorter documents.
-- Prefix matching (e.g., "token" matches "tokens") improves recall but can cause false positives for short query words that prefix unrelated longer words.
+| Tradeoff | Choice Made | Consequence |
+|---|---|---|
+| Speed vs. precision | Simple keyword overlap with term frequency | Fast and debuggable, but no semantic understanding |
+| Simplicity vs. accuracy | No stemming, no TF-IDF, no embeddings | Easy to trace failures, but phrasing mismatches cause missed results |
+| Recall vs. precision | `MIN_SCORE = 3` tuned on four queries | Allows some noise to avoid missing valid answers in shorter sections |
+| Whole document vs. sections | Section-level chunking at markdown headers | More focused snippets, but sections without headers attach to the document title chunk |
+| Exact match vs. variants | Prefix matching (e.g., "token" matches "tokens") | Improves recall for plurals and verb forms, but risks false positives for short query words |
 
 ---
 
@@ -67,21 +70,21 @@ The RAG prompt instructs Gemini to:
 
 ## 4. Experiments and Comparisons
 
-| Query | Naive LLM: helpful or harmful? | Retrieval only: helpful or harmful? | RAG: helpful or harmful? | Notes |
-|------|---------------------------------|--------------------------------------|---------------------------|-------|
-| Where is the auth token generated? | Harmful — confident answer about OAuth, IdP flows, and AWS Cognito; none of these exist in this project | Helpful — returns correct sections, but raw markdown is hard to read | Helpful — concise answer citing `POST /api/login`, `AUTH_SECRET_KEY`, and source files | RAG missed `## Token Generation` section specifically; retrieval ranking issue |
-| How do I connect to the database? | Harmful — generic guide covering MySQL, PostgreSQL, MongoDB, Node.js; none relevant to this project | Helpful — returns `DATABASE_URL` examples, `db.py` description, troubleshooting note | Helpful — precise answer: set `DATABASE_URL`, defaults to SQLite, `db.py` handles connections | Best RAG result of the four queries |
-| Which endpoint lists all users? | Harmful — guesses `/users` or `/api/v1/users`, advises consulting docs it doesn't have | Helpful — returns `GET /api/users` section directly, though raw format buries the answer | Helpful — one sentence: `GET /api/users`, sourced from `API_REFERENCE.md` | RAG at its clearest; retrieval found the right section, LLM extracted the answer |
-| How does a client refresh an access token? | Harmful — detailed explanation of OAuth 2.0 refresh token rotation, `grant_type`, confidential clients; none of this applies here | Helpful — returns `## Client Workflow` and `POST /api/refresh` sections correctly | Helpful — correct and concise: call `POST /api/refresh` with `Bearer <token>` in the header | All three steps worked well; Naive LLM's answer was technically accurate for OAuth but wrong for this project |
-| What is the weather today? | Partially safe — model recognized it is out of scope and declined | Safe — guardrail triggered, returned "I do not know based on these docs." | Safe — guardrail triggered before LLM call, returned "I do not know based on these docs." | Unrelated query handled correctly by all three modes |
+| Query | Naive LLM | Retrieval Only | RAG | Notes |
+|-------|-----------|----------------|-----|-------|
+| Where is the auth token generated? | ❌ Harmful — invented generic OAuth/IdP flows with no grounding in this codebase | ✅ Helpful — returned exact sections from `API_REFERENCE.md` and `AUTH.md` | ✅ Helpful — one precise sentence citing `POST /api/login`, `POST /api/refresh`, and the signing key | Naive mode answered a different, imaginary system |
+| How do I connect to the database? | ❌ Harmful — produced a multi-language tutorial (Python, Node.js, psql) entirely unrelated to this project | ✅ Helpful — returned `DATABASE_URL` config and `db.py` overview from `DATABASE.md` | ✅ Helpful — clean answer citing `DATABASE_URL`, SQLite default, and `db.py` | Naive mode was fluent but completely wrong for this codebase |
+| Which endpoint lists all users? | ⚠️ Partially helpful — correctly guessed `GET /api/users` by convention, but admitted it was guessing | ✅ Helpful — returned the exact endpoint with headers, response, and failure codes | ✅ Helpful — one-line answer: `GET /api/users`, sourced from `API_REFERENCE.md` | RAG was most useful here: accurate and concise |
+| How does a client refresh an access token? | ❌ Harmful — described full OAuth 2.0 refresh token rotation with `client_secret` and `grant_type`; none of which exist in this system | ✅ Helpful — returned client workflow and `POST /api/refresh` spec | ✅ Helpful — answered correctly with the exact endpoint and header format | Naive mode described a completely different auth architecture |
+| What is the weather today? | ⚠️ Partially safe — refused based on LLM self-judgment, not a system-enforced guardrail | ✅ Safe — guardrail fired, returned "I do not know based on these docs." | ✅ Safe — retrieval returned nothing, LLM was never called | Only RAG and Retrieval modes have a reliable, system-enforced refusal |
 
 **What patterns did you notice?**
 
-- **When does naive LLM look impressive but untrustworthy?** Every time it answered a question that has a real answer in the docs. The responses were long, structured, and confident — but described generic software patterns (OAuth, AWS Cognito, psycopg2) rather than the actual project. A developer reading the naive answer would not know they were getting the wrong system's documentation.
+- **Naive LLM looks impressive but is untrustworthy.** For every question, it produced fluent, well-structured answers — but they described imaginary systems (OAuth servers, MongoDB, psql, JWT rotation) that have nothing to do with this project. Confidence does not equal correctness.
 
-- **When is retrieval only clearly better?** When the answer needs to be traceable. Retrieval only always shows exactly which document and section the answer came from. It cannot fabricate. The weakness is that raw markdown sections require the developer to read and interpret them — there is no synthesis.
+- **Retrieval only is accurate but hard to interpret.** The raw snippets contain the correct answer but require the reader to extract it themselves. It returns too much context (e.g., failure cases, unrelated endpoints) alongside the relevant information.
 
-- **When is RAG clearly better than both?** On precise factual questions like "Which endpoint lists all users?" — RAG returned a single sentence with a source citation. Retrieval only returned three sections of raw markdown. Naive LLM guessed. RAG combined the accuracy of retrieval with the readability of generation.
+- **RAG consistently balances clarity and evidence.** Every RAG answer was 2-4 sentences, cited its sources, and contained only information present in the docs. It was the most useful mode for all four questions.
 
 ---
 
