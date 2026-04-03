@@ -87,3 +87,9 @@ You will primarily work in:
 - Python 3.9+
 - A Gemini API key for LLM features (only needed for modes 1 and 3)
 - No database, no server setup, no external services besides LLM calls
+
+---
+
+## Tech Fellow Notes
+
+The core concept students need to understand is that retrieval and generation are separate responsibilities, and that a fluent, confident answer from an LLM is not the same as a grounded one. Without retrieval, the model answers from training data rather than the actual project docs. Students most commonly struggle with the scoring and ranking logic: they can implement `build_index` and `score_document` without fully understanding why a wrong document ranks higher than the right one, and tracing the failure requires printing per-document scores and comparing them against the query words that actually matched. AI tools were genuinely helpful for explaining what the retrieval pipeline was doing at each stage and for generating edge case queries to stress-test the guardrails, but they were misleading when the naive LLM produced long, well-formatted answers that sounded authoritative, so students need to be guided to ask not "does it sound right?" but "is it sourced?" The most important thing the three-mode comparison reveals is that RAG is a system design decision, not a model capability: improvements in answer quality came from better chunking, stop word filtering, and scoring logic, not from a smarter model. To guide a student without giving the answer, ask them to run the same question in all three modes, then point to a specific claim in the naive LLM answer and ask them to find the sentence in the docs that supports it. When they cannot, the case for retrieval makes itself.
