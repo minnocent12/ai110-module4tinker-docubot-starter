@@ -17,6 +17,13 @@ The docs folder contains realistic developer documents (API reference, authentic
 ---
 
 ## Setup
+### 0. Install Python dependencies
+1. Create a virtual environment (optional but recommended):
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate      # Mac or Linux
+   .venv\Scripts\activate         # Windows
 
 ### 1. Install Python dependencies
 
